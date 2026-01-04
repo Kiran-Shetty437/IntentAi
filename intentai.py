@@ -11,7 +11,7 @@ class IntentAI:
         # 🔒 URL is hidden here (like OpenAI SDK)
         self.base_url = os.getenv(
             "INTENT_AI_URL",
-            "http://127.0.0.1:8000"
+            "https://intentai-pqtt.onrender.com"
         ).rstrip("/")
 
     def classify(self, text):
