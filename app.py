@@ -15,7 +15,15 @@ ACTIONS = ["open", "close", "search", "find", "lookup", "copy", "paste"]
 
 # LOAD NLP MODEL
 
-nlp = spacy.load("en_core_web_sm")
+# LOAD NLP MODEL (safe for Render / cloud)
+
+try:
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    from spacy.cli import download
+    download("en_core_web_sm")
+    nlp = spacy.load("en_core_web_sm")
+
 
 
 # FASTAPI APP
