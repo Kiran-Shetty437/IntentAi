@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+spacy
 scikit-learn
-requests
 pydantic
+python-dotenv

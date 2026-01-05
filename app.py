@@ -1,134 +1,189 @@
+import re
+import os
+import spacy
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-import os
 
-# ======================================================
-# API KEY (set as environment variable)
-# ======================================================
-# Windows:
-#   setx INTENT_AI_KEY "my_secret_key_123"
-# Linux/macOS:
-#   export INTENT_AI_KEY="my_secret_key_123"
+# ==================================================
+# CONFIG
+# ==================================================
+API_KEY = os.getenv("INTENT_AI_KEY")  # set in Render / OS env
+ACTIONS = ["open", "close", "search", "find", "lookup", "copy", "paste"]
 
-API_KEY = os.getenv("INTENT_AI_KEY")
+# ==================================================
+# LOAD NLP MODEL
+# ==================================================
+nlp = spacy.load("en_core_web_sm")
 
-# ======================================================
+# ==================================================
 # FASTAPI APP
-# ======================================================
-app = FastAPI(title="Intent Classification AI")
+# ==================================================
+app = FastAPI(title="Hybrid NLP Intent AI")
 
 class InputText(BaseModel):
     text: str
 
-# ======================================================
-# TRAINING DATA (SMALL REAL AI DATASET)
-# ======================================================
-sentences = [
-    "open chrome",
-    "open chatgpt",
-    "close chrome",
-    "close vscode",
-    "search python",
-    "search chatgpt",
-    "find project folder",
-    "find drive",
-    "copy text",
-    "paste",
-    "delete file",
-    "save document",
-    "minimize window",
-    "maximize window",
-    "restore window",
-    "what is python",
-    "how to create google account",
-    "hello",
-    "thank you"
+# ==================================================
+# ML FALLBACK MODEL
+# ==================================================
+train_data = [
+    ("hello", "chat"),
+    ("hi", "chat"),
+    ("thank you", "chat"),
+
+    ("what is python", "question"),
+    ("why we use python", "question"),
+    ("how to install python", "question"),
+
+    ("open chrome", "command"),
+    ("close chrome", "command"),
+    ("search python", "command"),
 ]
 
-labels = [
-    "open",
-    "open",
-    "close",
-    "close",
-    "search",
-    "search",
-    "find",
-    "find",
-    "copy",
-    "paste",
-    "delete",
-    "save",
-    "minimize",
-    "maximize",
-    "restore",
-    "explain",
-    "explain",
-    "chat",
-    "chat"
-]
+X = [x for x, _ in train_data]
+y = [y for _, y in train_data]
 
-# ======================================================
-# TRAIN ML MODEL (THIS IS YOUR AI)
-# ======================================================
 vectorizer = TfidfVectorizer()
-X = vectorizer.fit_transform(sentences)
+X_vec = vectorizer.fit_transform(X)
 
 model = LogisticRegression()
-model.fit(X, labels)
+model.fit(X_vec, y)
 
-# ======================================================
-# ENTITY EXTRACTION
-# ======================================================
-def extract_entities(task, text):
-    words = text.split()
-    rest = " ".join(words[1:]) if len(words) > 1 else ""
+# ==================================================
+# HELPERS
+# ==================================================
+def normalize(text: str) -> str:
+    return re.sub(r"[^\w\s]", "", text.lower()).strip()
 
-    if task == "search":
-        return {"query": rest, "source": "google"}
+def normalize_app(name: str) -> str:
+    aliases = {
+        "vs studio": "vscode",
+        "vs code": "vscode",
+        "visual studio": "vscode",
+        "visual studio code": "vscode",
+        "google chrome": "chrome",
+        "chrome browser": "chrome",
+        "chat gpt": "chatgpt",
+        "whats app": "whatsapp",
+        "what's app": "whatsapp"
+    }
+    return aliases.get(name, name)
 
-    if task == "find":
-        return {"target": rest, "scope": "local"}
+def split_tasks(text: str):
+    pattern = r"\b(" + "|".join(ACTIONS) + r")\b"
+    matches = list(re.finditer(pattern, text))
+    chunks = []
 
-    if task == "explain":
-        return {"topic": rest}
+    for i, m in enumerate(matches):
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        chunks.append(text[start:end].strip())
 
-    if task in ["open", "close", "minimize", "maximize", "restore"]:
-        return {"target": rest}
+    return chunks
 
-    if task in ["copy", "delete", "save"]:
-        return {"object": rest}
+def parse_task(chunk: str):
+    doc = nlp(chunk)
+    action = None
+    targets = []
 
-    if task == "paste":
-        return {"destination": "current_context"}
+    for token in doc:
+        if token.pos_ == "VERB" and token.lemma_ in ACTIONS:
+            action = token.lemma_
+        if token.dep_ in ("dobj", "pobj"):
+            targets.append(token.text)
 
-    return {}
+    if not action:
+        return []
 
-# ======================================================
-# INTENT CLASSIFICATION ENDPOINT (API KEY PROTECTED)
-# ======================================================
+    if action == "paste":
+        return [{"action": "paste"}]
+
+    if not targets or targets[0] in ("it", "app"):
+        return [{"action": action, "needs_clarification": True}]
+
+    results = []
+    for t in re.split(r"\band\b|,", " ".join(targets)):
+        t = t.strip()
+        if t:
+            results.append({
+                "action": action,
+                "target": normalize_app(t)
+            })
+
+    return results
+
+# ==================================================
+# API ENDPOINT
+# ==================================================
 @app.post("/intent")
 def classify_intent(
     data: InputText,
     x_api_key: str = Header(None)
 ):
+    # ---- API KEY CHECK ----
     if API_KEY and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    text = data.text.lower().strip()
+    text = normalize(data.text)
 
-    task = model.predict(vectorizer.transform([text]))[0]
+    # ---- CHAT ----
+    if text in (
+        "hi", "hello", "hey",
+        "how are you", "how was your day",
+        "what are you doing"
+    ):
+        return {"intent": "chat", "confidence": 1.0}
 
-    if task == "explain":
-        intent = "question"
-    elif task == "chat":
-        intent = "chat"
-    else:
-        intent = "command"
+    # ---- QUESTIONS ----
+    if text.startswith(("how", "why", "what")) and not re.search(
+        r"\b(" + "|".join(ACTIONS) + r")\b", text
+    ):
+        return {
+            "intent": "question",
+            "task": "explain",
+            "entities": {"topic": text},
+            "confidence": 1.0
+        }
+
+    # ---- COMMANDS (MULTI-TASK) ----
+    if re.search(r"\b(" + "|".join(ACTIONS) + r")\b", text):
+        chunks = split_tasks(text)
+        tasks = []
+
+        for chunk in chunks:
+            parsed = parse_task(chunk)
+            for t in parsed:
+                if t.get("needs_clarification"):
+                    return {
+                        "intent": "clarification",
+                        "task": t["action"],
+                        "ask": f"What do you want to {t['action']}?",
+                        "confidence": 1.0
+                    }
+                tasks.append(t)
+
+        if tasks:
+            return {
+                "intent": "command",
+                "tasks": tasks,
+                "confidence": 1.0
+            }
+
+    # ---- ML FALLBACK ----
+    vec = vectorizer.transform([text])
+    probs = model.predict_proba(vec)[0]
+    intent = model.classes_[probs.argmax()]
+    confidence = probs.max()
+
+    if confidence < 0.6:
+        return {
+            "intent": "unknown",
+            "ask": "I didn't understand. Can you rephrase?"
+        }
 
     return {
         "intent": intent,
-        "task": task if intent != "chat" else None,
-        "entities": extract_entities(task, text)
+        "confidence": round(confidence, 2)
     }
