@@ -4,4 +4,3 @@ spacy
 scikit-learn
 pydantic
 python-dotenv
-en-core-web-sm
