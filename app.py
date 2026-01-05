@@ -6,28 +6,28 @@ from pydantic import BaseModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 
-# ==================================================
+
 # CONFIG
-# ==================================================
+
 API_KEY = os.getenv("INTENT_AI_KEY")  # set in Render / OS env
 ACTIONS = ["open", "close", "search", "find", "lookup", "copy", "paste"]
 
-# ==================================================
+
 # LOAD NLP MODEL
-# ==================================================
+
 nlp = spacy.load("en_core_web_sm")
 
-# ==================================================
+
 # FASTAPI APP
-# ==================================================
+
 app = FastAPI(title="Hybrid NLP Intent AI")
 
 class InputText(BaseModel):
     text: str
 
-# ==================================================
+
 # ML FALLBACK MODEL
-# ==================================================
+
 train_data = [
     ("hello", "chat"),
     ("hi", "chat"),
@@ -51,9 +51,7 @@ X_vec = vectorizer.fit_transform(X)
 model = LogisticRegression()
 model.fit(X_vec, y)
 
-# ==================================================
 # HELPERS
-# ==================================================
 def normalize(text: str) -> str:
     return re.sub(r"[^\w\s]", "", text.lower()).strip()
 
@@ -114,9 +112,9 @@ def parse_task(chunk: str):
 
     return results
 
-# ==================================================
+
 # API ENDPOINT
-# ==================================================
+
 @app.post("/intent")
 def classify_intent(
     data: InputText,
