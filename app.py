@@ -46,15 +46,15 @@ nlp = spacy.load("en_core_web_sm")
 # ==================================================
 app = FastAPI(
     title="IntentAI – NLP Hybrid API",
-    description="Intent detection with robust multi-command & platform-aware search",
-    version="1.3.0"
+    description="Robust intent detection with multi-command & platform-aware search",
+    version="1.4.0"
 )
 
 class InputText(BaseModel):
     text: str
 
 # ==================================================
-# ML FALLBACK MODEL
+# ML FALLBACK (OPTIONAL)
 # ==================================================
 train_data = [
     ("hello", "chat"),
@@ -98,24 +98,21 @@ def detect_platform(text: str, query: str = "") -> str:
     text = text.lower()
     query = query.lower()
 
-    # 1️⃣ Explicit platform
+    # explicit platform
     for platform, keywords in SEARCH_PLATFORMS.items():
-        for k in keywords:
-            if k in text:
-                return platform
+        if any(k in text for k in keywords):
+            return platform
 
-    # 2️⃣ File / folder
+    # files
     if any(ext in query for ext in FILE_EXTENSIONS):
         return "files"
     if any(w in query for w in ["file", "folder", "directory"]):
         return "files"
 
-    # 3️⃣ App → Windows search
-    for app in KNOWN_APPS:
-        if app in query:
-            return "windows_search"
+    # apps → windows search
+    if any(app in query for app in KNOWN_APPS):
+        return "windows_search"
 
-    # 4️⃣ Default
     return "google"
 
 def split_tasks(text: str):
@@ -135,9 +132,8 @@ def parse_task(chunk: str):
     action = None
     targets = []
 
-    # 🔥 FIX: POS-based target extraction (NOT dependency-based)
     for token in doc:
-        if token.pos_ == "VERB" and token.lemma_ in COMMAND_VERBS:
+        if token.lemma_ in COMMAND_VERBS:
             action = token.lemma_
 
         if token.pos_ in ("NOUN", "PROPN") and not token.is_stop:
@@ -155,12 +151,10 @@ def parse_task(chunk: str):
     joined_targets = " ".join(targets)
     results = []
 
-    # ---------- SEARCH ----------
     if action == "search":
         platform = detect_platform(chunk, joined_targets)
-
         clean_query = re.sub(
-            r"\b(on|in)?\s*(youtube|google|web|browser|files?|folders?)\b",
+            r"\b(on|in)?\s*(youtube|google|browser|files?|folders?)\b",
             "",
             joined_targets
         ).strip()
@@ -170,8 +164,6 @@ def parse_task(chunk: str):
             "query": clean_query,
             "platform": platform
         })
-
-    # ---------- OTHER COMMANDS ----------
     else:
         for t in re.split(r"\band\b|,", joined_targets):
             t = t.strip()
@@ -184,16 +176,20 @@ def parse_task(chunk: str):
     return results
 
 # ==================================================
-# INTENT DETECTION
+# 🔥 FIXED INTENT DETECTION (IMPORTANT)
 # ==================================================
-def detect_intent(doc):
-    for token in doc:
-        if token.lower_ in QUESTION_WORDS:
-            return "question"
+def detect_intent(text: str):
+    text = text.lower()
 
-    for token in doc:
-        if token.pos_ == "VERB" and token.lemma_ in COMMAND_VERBS:
+    # command first (strong rule-based)
+    for verb in COMMAND_VERBS:
+        if re.search(rf"\b{verb}\b", text):
             return "command"
+
+    # question
+    for word in QUESTION_WORDS:
+        if re.search(rf"\b{word}\b", text):
+            return "question"
 
     return "chat"
 
@@ -209,8 +205,8 @@ def classify_intent(
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     text = normalize(data.text)
+    intent = detect_intent(text)
     doc = nlp(text)
-    intent = detect_intent(doc)
 
     # ---------- QUESTION ----------
     if intent == "question":
@@ -238,33 +234,14 @@ def classify_intent(
                     }
                 tasks.append(t)
 
-        if tasks:
-            return {
-                "intent": "command",
-                "tasks": tasks,
-                "confidence": 1.0
-            }
-
-    # ---------- CHAT ----------
-    if intent == "chat":
         return {
-            "intent": "chat",
+            "intent": "command",
+            "tasks": tasks,
             "confidence": 1.0
         }
 
-    # ---------- ML FALLBACK ----------
-    vec = vectorizer.transform([text])
-    probs = model.predict_proba(vec)[0]
-    ml_intent = model.classes_[probs.argmax()]
-    confidence = probs.max()
-
-    if confidence < 0.6:
-        return {
-            "intent": "unknown",
-            "ask": "I didn't understand. Can you rephrase?"
-        }
-
+    # ---------- CHAT ----------
     return {
-        "intent": ml_intent,
-        "confidence": round(confidence, 2)
+        "intent": "chat",
+        "confidence": 1.0
     }
