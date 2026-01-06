@@ -6,47 +6,62 @@ from pydantic import BaseModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 
-
+# ==================================================
 # CONFIG
+# ==================================================
+API_KEY = os.getenv("INTENT_AI_KEY")
 
-API_KEY = os.getenv("INTENT_AI_KEY")  # set in Render / OS env
-ACTIONS = ["open", "close", "search", "find", "lookup", "copy", "paste"]
+QUESTION_WORDS = {"how", "what", "why", "where", "when", "who", "which"}
 
+COMMAND_VERBS = {
+    "open", "close", "search", "find",
+    "copy", "paste", "delete", "save",
+    "launch", "start", "exit", "quit"
+}
 
-# LOAD NLP MODEL
+SEARCH_PLATFORMS = {
+    "youtube": {"youtube", "yt"},
+    "google": {"google", "web", "browser"},
+    "files": {"file", "files", "folder", "directory"},
+}
 
-# LOAD NLP MODEL (safe for Render / cloud)
+KNOWN_APPS = {
+    "vscode", "chrome", "whatsapp", "chatgpt",
+    "notepad", "calculator", "spotify", "edge",
+    "word", "excel", "powerpoint", "youtube"
+}
 
-try:
-    nlp = spacy.load("en_core_web_sm")
-except OSError:
-    from spacy.cli import download
-    download("en_core_web_sm")
-    nlp = spacy.load("en_core_web_sm")
+FILE_EXTENSIONS = {
+    ".txt", ".pdf", ".doc", ".docx", ".xls", ".xlsx",
+    ".ppt", ".pptx", ".jpg", ".png", ".mp4", ".zip"
+}
 
+# ==================================================
+# LOAD NLP
+# ==================================================
+nlp = spacy.load("en_core_web_sm")
 
-
+# ==================================================
 # FASTAPI APP
-
-app = FastAPI(title="Hybrid NLP Intent AI")
+# ==================================================
+app = FastAPI(
+    title="IntentAI – NLP Hybrid API",
+    description="Intent detection with platform-aware intelligent search",
+    version="1.2.0"
+)
 
 class InputText(BaseModel):
     text: str
 
-
+# ==================================================
 # ML FALLBACK MODEL
-
+# ==================================================
 train_data = [
     ("hello", "chat"),
     ("hi", "chat"),
     ("thank you", "chat"),
-
     ("what is python", "question"),
-    ("why we use python", "question"),
-    ("how to install python", "question"),
-
     ("open chrome", "command"),
-    ("close chrome", "command"),
     ("search python", "command"),
 ]
 
@@ -59,7 +74,9 @@ X_vec = vectorizer.fit_transform(X)
 model = LogisticRegression()
 model.fit(X_vec, y)
 
+# ==================================================
 # HELPERS
+# ==================================================
 def normalize(text: str) -> str:
     return re.sub(r"[^\w\s]", "", text.lower()).strip()
 
@@ -77,8 +94,34 @@ def normalize_app(name: str) -> str:
     }
     return aliases.get(name, name)
 
+def detect_platform(text: str, query: str = "") -> str:
+    text = text.lower()
+    query = query.lower()
+
+    # 1️⃣ Explicit platform mentioned
+    for platform, keywords in SEARCH_PLATFORMS.items():
+        for k in keywords:
+            if k in text:
+                return platform
+
+    # 2️⃣ File / folder detection
+    for ext in FILE_EXTENSIONS:
+        if ext in query:
+            return "files"
+
+    if any(w in query for w in ["file", "folder", "directory"]):
+        return "files"
+
+    # 3️⃣ App detection → Windows search
+    for app in KNOWN_APPS:
+        if app in query:
+            return "windows_search"
+
+    # 4️⃣ Default
+    return "google"
+
 def split_tasks(text: str):
-    pattern = r"\b(" + "|".join(ACTIONS) + r")\b"
+    pattern = r"\b(" + "|".join(COMMAND_VERBS) + r")\b"
     matches = list(re.finditer(pattern, text))
     chunks = []
 
@@ -95,7 +138,7 @@ def parse_task(chunk: str):
     targets = []
 
     for token in doc:
-        if token.pos_ == "VERB" and token.lemma_ in ACTIONS:
+        if token.pos_ == "VERB" and token.lemma_ in COMMAND_VERBS:
             action = token.lemma_
         if token.dep_ in ("dobj", "pobj"):
             targets.append(token.text)
@@ -110,42 +153,63 @@ def parse_task(chunk: str):
         return [{"action": action, "needs_clarification": True}]
 
     results = []
-    for t in re.split(r"\band\b|,", " ".join(targets)):
-        t = t.strip()
-        if t:
-            results.append({
-                "action": action,
-                "target": normalize_app(t)
-            })
+    joined_targets = " ".join(targets)
+
+    if action == "search":
+        platform = detect_platform(chunk, joined_targets)
+        clean_query = re.sub(
+            r"\b(on|in)?\s*(youtube|google|web|browser|files?|folders?)\b",
+            "",
+            joined_targets
+        ).strip()
+
+        results.append({
+            "action": "search",
+            "query": clean_query,
+            "platform": platform
+        })
+    else:
+        for t in re.split(r"\band\b|,", joined_targets):
+            t = t.strip()
+            if t:
+                results.append({
+                    "action": action,
+                    "target": normalize_app(t)
+                })
 
     return results
 
+# ==================================================
+# INTENT DETECTION
+# ==================================================
+def detect_intent(doc):
+    for token in doc:
+        if token.lower_ in QUESTION_WORDS:
+            return "question"
 
+    for token in doc:
+        if token.pos_ == "VERB" and token.lemma_ in COMMAND_VERBS:
+            return "command"
+
+    return "chat"
+
+# ==================================================
 # API ENDPOINT
-
+# ==================================================
 @app.post("/intent")
 def classify_intent(
     data: InputText,
     x_api_key: str = Header(None)
 ):
-    # ---- API KEY CHECK ----
     if API_KEY and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     text = normalize(data.text)
+    doc = nlp(text)
+    intent = detect_intent(doc)
 
-    # ---- CHAT ----
-    if text in (
-        "hi", "hello", "hey",
-        "how are you", "how was your day",
-        "what are you doing"
-    ):
-        return {"intent": "chat", "confidence": 1.0}
-
-    # ---- QUESTIONS ----
-    if text.startswith(("how", "why", "what")) and not re.search(
-        r"\b(" + "|".join(ACTIONS) + r")\b", text
-    ):
+    # ---------- QUESTION ----------
+    if intent == "question":
         return {
             "intent": "question",
             "task": "explain",
@@ -153,8 +217,8 @@ def classify_intent(
             "confidence": 1.0
         }
 
-    # ---- COMMANDS (MULTI-TASK) ----
-    if re.search(r"\b(" + "|".join(ACTIONS) + r")\b", text):
+    # ---------- COMMAND ----------
+    if intent == "command":
         chunks = split_tasks(text)
         tasks = []
 
@@ -177,10 +241,17 @@ def classify_intent(
                 "confidence": 1.0
             }
 
-    # ---- ML FALLBACK ----
+    # ---------- CHAT ----------
+    if intent == "chat":
+        return {
+            "intent": "chat",
+            "confidence": 1.0
+        }
+
+    # ---------- ML FALLBACK ----------
     vec = vectorizer.transform([text])
     probs = model.predict_proba(vec)[0]
-    intent = model.classes_[probs.argmax()]
+    ml_intent = model.classes_[probs.argmax()]
     confidence = probs.max()
 
     if confidence < 0.6:
@@ -190,6 +261,6 @@ def classify_intent(
         }
 
     return {
-        "intent": intent,
+        "intent": ml_intent,
         "confidence": round(confidence, 2)
     }
