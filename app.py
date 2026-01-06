@@ -43,9 +43,9 @@ nlp = spacy.load("en_core_web_sm")
 # FASTAPI APP
 # ==================================================
 app = FastAPI(
-    title="IntentAI – Final Comma-Safe API",
+    title="IntentAI – Final Stable API",
     description="Multi-command, multi-task, multi-target intent engine",
-    version="2.1.0"
+    version="2.2.0"
 )
 
 class InputText(BaseModel):
@@ -71,22 +71,32 @@ def normalize_app(name: str) -> str:
     }
     return aliases.get(name.strip(), name.strip())
 
+# ==================================================
+# 🔥 PLATFORM DETECTION (PRIORITY FIXED – SAFE)
+# ==================================================
 def detect_platform(text: str, query: str) -> str:
     text = text.lower()
     query = query.lower()
 
+    # 1️⃣ FILE / FOLDER MUST WIN FIRST
+    if any(ext in query for ext in FILE_EXTENSIONS):
+        return "files"
+
+    if any(w in query for w in ["file", "files", "folder", "directory"]):
+        return "files"
+
+    # 2️⃣ EXPLICIT PLATFORMS (youtube, google, etc.)
     for platform, keywords in SEARCH_PLATFORMS.items():
+        if platform == "files":
+            continue
         if any(k in text for k in keywords):
             return platform
 
-    if any(ext in query for ext in FILE_EXTENSIONS):
-        return "files"
-    if any(w in query for w in ["file", "folder", "directory"]):
-        return "files"
-
+    # 3️⃣ APP NAME → WINDOWS SEARCH
     if any(app in query for app in KNOWN_APPS):
         return "windows_search"
 
+    # 4️⃣ DEFAULT
     return "google"
 
 # ==================================================
@@ -104,7 +114,7 @@ def detect_intent(text: str):
     return "chat"
 
 # ==================================================
-# TASK SPLITTING (UNCHANGED LOGIC)
+# TASK SPLITTING
 # ==================================================
 def split_tasks(text: str):
     pattern = r"\b(" + "|".join(COMMAND_VERBS) + r")\b"
@@ -122,7 +132,7 @@ def split_tasks(text: str):
     return chunks
 
 # ==================================================
-# TASK PARSER (COMMA-SAFE PATCH)
+# TASK PARSER (COMMA + AND SAFE)
 # ==================================================
 def parse_task(chunk: str):
     doc = nlp(chunk)
@@ -145,14 +155,10 @@ def parse_task(chunk: str):
 
     raw_target_text = parts[1]
 
-    # 🔥 FINAL FIX: handle commas + "and" together
+    # 🔥 Comma + "and" support
     raw_targets = re.split(r"\s*,\s*|\s+and\s+", raw_target_text)
 
-    targets = []
-    for t in raw_targets:
-        t = t.strip()
-        if t:
-            targets.append(t)
+    targets = [t.strip() for t in raw_targets if t.strip()]
 
     if not targets:
         return [{"action": action, "needs_clarification": True}]
