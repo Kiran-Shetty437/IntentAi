@@ -3,8 +3,6 @@ import os
 import spacy
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
 
 # ==================================================
 # CONFIG
@@ -45,34 +43,13 @@ nlp = spacy.load("en_core_web_sm")
 # FASTAPI APP
 # ==================================================
 app = FastAPI(
-    title="IntentAI – NLP Hybrid API",
-    description="Robust intent detection with multi-command & platform-aware search",
-    version="1.4.0"
+    title="IntentAI – Final Stable API",
+    description="Multi-action, platform-aware intent & task detection",
+    version="1.5.0"
 )
 
 class InputText(BaseModel):
     text: str
-
-# ==================================================
-# ML FALLBACK (OPTIONAL)
-# ==================================================
-train_data = [
-    ("hello", "chat"),
-    ("hi", "chat"),
-    ("thank you", "chat"),
-    ("what is python", "question"),
-    ("open chrome", "command"),
-    ("search python", "command"),
-]
-
-X = [x for x, _ in train_data]
-y = [y for _, y in train_data]
-
-vectorizer = TfidfVectorizer()
-X_vec = vectorizer.fit_transform(X)
-
-model = LogisticRegression()
-model.fit(X_vec, y)
 
 # ==================================================
 # HELPERS
@@ -94,32 +71,36 @@ def normalize_app(name: str) -> str:
     }
     return aliases.get(name, name)
 
-def detect_platform(text: str, query: str = "") -> str:
+def detect_platform(text: str, query: str) -> str:
     text = text.lower()
     query = query.lower()
 
-    # explicit platform
     for platform, keywords in SEARCH_PLATFORMS.items():
         if any(k in text for k in keywords):
             return platform
 
-    # files
     if any(ext in query for ext in FILE_EXTENSIONS):
         return "files"
     if any(w in query for w in ["file", "folder", "directory"]):
         return "files"
 
-    # apps → windows search
     if any(app in query for app in KNOWN_APPS):
         return "windows_search"
 
     return "google"
 
+# ==================================================
+# TASK SPLITTING (FIXED)
+# ==================================================
 def split_tasks(text: str):
     pattern = r"\b(" + "|".join(COMMAND_VERBS) + r")\b"
     matches = list(re.finditer(pattern, text))
-    chunks = []
 
+    # 🔥 IMPORTANT FIX
+    if not matches:
+        return [text]
+
+    chunks = []
     for i, m in enumerate(matches):
         start = m.start()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
@@ -127,6 +108,9 @@ def split_tasks(text: str):
 
     return chunks
 
+# ==================================================
+# TASK PARSER (FIXED)
+# ==================================================
 def parse_task(chunk: str):
     doc = nlp(chunk)
     action = None
@@ -176,19 +160,17 @@ def parse_task(chunk: str):
     return results
 
 # ==================================================
-# 🔥 FIXED INTENT DETECTION (IMPORTANT)
+# INTENT DETECTION (STRONG RULE-BASED)
 # ==================================================
 def detect_intent(text: str):
     text = text.lower()
 
-    # command first (strong rule-based)
     for verb in COMMAND_VERBS:
         if re.search(rf"\b{verb}\b", text):
             return "command"
 
-    # question
-    for word in QUESTION_WORDS:
-        if re.search(rf"\b{word}\b", text):
+    for q in QUESTION_WORDS:
+        if re.search(rf"\b{q}\b", text):
             return "question"
 
     return "chat"
@@ -206,7 +188,6 @@ def classify_intent(
 
     text = normalize(data.text)
     intent = detect_intent(text)
-    doc = nlp(text)
 
     # ---------- QUESTION ----------
     if intent == "question":
@@ -233,6 +214,13 @@ def classify_intent(
                         "confidence": 1.0
                     }
                 tasks.append(t)
+
+        if not tasks:
+            return {
+                "intent": "clarification",
+                "ask": "What do you want to do?",
+                "confidence": 1.0
+            }
 
         return {
             "intent": "command",
