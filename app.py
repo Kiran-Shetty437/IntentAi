@@ -26,7 +26,7 @@ SEARCH_PLATFORMS = {
 KNOWN_APPS = {
     "vscode", "chrome", "whatsapp", "chatgpt",
     "notepad", "calculator", "spotify", "edge",
-    "word", "excel", "powerpoint", "youtube"
+    "word", "excel", "powerpoint", "youtube", "google"
 }
 
 FILE_EXTENSIONS = {
@@ -43,9 +43,9 @@ nlp = spacy.load("en_core_web_sm")
 # FASTAPI APP
 # ==================================================
 app = FastAPI(
-    title="IntentAI – Final Patched API",
+    title="IntentAI – Final Comma-Safe API",
     description="Multi-command, multi-task, multi-target intent engine",
-    version="2.0.0"
+    version="2.1.0"
 )
 
 class InputText(BaseModel):
@@ -104,7 +104,7 @@ def detect_intent(text: str):
     return "chat"
 
 # ==================================================
-# TASK SPLITTING (ROBUST)
+# TASK SPLITTING (UNCHANGED LOGIC)
 # ==================================================
 def split_tasks(text: str):
     pattern = r"\b(" + "|".join(COMMAND_VERBS) + r")\b"
@@ -122,13 +122,12 @@ def split_tasks(text: str):
     return chunks
 
 # ==================================================
-# TASK PARSER (PATCHED)
+# TASK PARSER (COMMA-SAFE PATCH)
 # ==================================================
 def parse_task(chunk: str):
     doc = nlp(chunk)
     action = None
 
-    # detect action
     for token in doc:
         if token.lemma_ in COMMAND_VERBS:
             action = token.lemma_
@@ -137,19 +136,17 @@ def parse_task(chunk: str):
     if not action:
         return []
 
-    # handle paste directly
     if action == "paste":
         return [{"action": "paste"}]
 
-    # extract raw target text AFTER action (CRITICAL FIX)
     parts = chunk.split(action, 1)
     if len(parts) < 2:
         return [{"action": action, "needs_clarification": True}]
 
     raw_target_text = parts[1]
 
-    # split targets by 'and' or ','
-    raw_targets = re.split(r"\band\b|,", raw_target_text)
+    # 🔥 FINAL FIX: handle commas + "and" together
+    raw_targets = re.split(r"\s*,\s*|\s+and\s+", raw_target_text)
 
     targets = []
     for t in raw_targets:
@@ -200,21 +197,23 @@ def classify_intent(
     if API_KEY and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    text = normalize(data.text)
-    intent = detect_intent(text)
+    raw_text = data.text.lower()
+    clean_text = normalize(data.text)
+
+    intent = detect_intent(clean_text)
 
     # ---------- QUESTION ----------
     if intent == "question":
         return {
             "intent": "question",
             "task": "explain",
-            "entities": {"topic": text},
+            "entities": {"topic": clean_text},
             "confidence": 1.0
         }
 
     # ---------- COMMAND ----------
     if intent == "command":
-        chunks = split_tasks(text)
+        chunks = split_tasks(raw_text)
         tasks = []
 
         for chunk in chunks:
