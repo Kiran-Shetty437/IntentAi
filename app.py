@@ -43,9 +43,9 @@ nlp = spacy.load("en_core_web_sm")
 # FASTAPI APP
 # ==================================================
 app = FastAPI(
-    title="IntentAI – Final Stable API",
-    description="Multi-action, platform-aware intent & task detection",
-    version="1.5.0"
+    title="IntentAI – Final Patched API",
+    description="Multi-command, multi-task, multi-target intent engine",
+    version="2.0.0"
 )
 
 class InputText(BaseModel):
@@ -59,8 +59,8 @@ def normalize(text: str) -> str:
 
 def normalize_app(name: str) -> str:
     aliases = {
-        "vs studio": "vscode",
         "vs code": "vscode",
+        "vs studio": "vscode",
         "visual studio": "vscode",
         "visual studio code": "vscode",
         "google chrome": "chrome",
@@ -69,7 +69,7 @@ def normalize_app(name: str) -> str:
         "whats app": "whatsapp",
         "what's app": "whatsapp"
     }
-    return aliases.get(name, name)
+    return aliases.get(name.strip(), name.strip())
 
 def detect_platform(text: str, query: str) -> str:
     text = text.lower()
@@ -90,13 +90,26 @@ def detect_platform(text: str, query: str) -> str:
     return "google"
 
 # ==================================================
-# TASK SPLITTING (FIXED)
+# INTENT DETECTION (RULE BASED)
+# ==================================================
+def detect_intent(text: str):
+    for verb in COMMAND_VERBS:
+        if re.search(rf"\b{verb}\b", text):
+            return "command"
+
+    for q in QUESTION_WORDS:
+        if re.search(rf"\b{q}\b", text):
+            return "question"
+
+    return "chat"
+
+# ==================================================
+# TASK SPLITTING (ROBUST)
 # ==================================================
 def split_tasks(text: str):
     pattern = r"\b(" + "|".join(COMMAND_VERBS) + r")\b"
     matches = list(re.finditer(pattern, text))
 
-    # 🔥 IMPORTANT FIX
     if not matches:
         return [text]
 
@@ -109,34 +122,51 @@ def split_tasks(text: str):
     return chunks
 
 # ==================================================
-# TASK PARSER (FIXED)
+# TASK PARSER (PATCHED)
 # ==================================================
 def parse_task(chunk: str):
     doc = nlp(chunk)
     action = None
-    targets = []
 
+    # detect action
     for token in doc:
         if token.lemma_ in COMMAND_VERBS:
             action = token.lemma_
-
-        if token.pos_ in ("NOUN", "PROPN") and not token.is_stop:
-            targets.append(token.text)
+            break
 
     if not action:
         return []
 
+    # handle paste directly
     if action == "paste":
         return [{"action": "paste"}]
+
+    # extract raw target text AFTER action (CRITICAL FIX)
+    parts = chunk.split(action, 1)
+    if len(parts) < 2:
+        return [{"action": action, "needs_clarification": True}]
+
+    raw_target_text = parts[1]
+
+    # split targets by 'and' or ','
+    raw_targets = re.split(r"\band\b|,", raw_target_text)
+
+    targets = []
+    for t in raw_targets:
+        t = t.strip()
+        if t:
+            targets.append(t)
 
     if not targets:
         return [{"action": action, "needs_clarification": True}]
 
-    joined_targets = " ".join(targets)
     results = []
 
+    # ---------- SEARCH ----------
     if action == "search":
+        joined_targets = " ".join(targets)
         platform = detect_platform(chunk, joined_targets)
+
         clean_query = re.sub(
             r"\b(on|in)?\s*(youtube|google|browser|files?|folders?)\b",
             "",
@@ -148,32 +178,16 @@ def parse_task(chunk: str):
             "query": clean_query,
             "platform": platform
         })
+
+    # ---------- OTHER COMMANDS ----------
     else:
-        for t in re.split(r"\band\b|,", joined_targets):
-            t = t.strip()
-            if t:
-                results.append({
-                    "action": action,
-                    "target": normalize_app(t)
-                })
+        for t in targets:
+            results.append({
+                "action": action,
+                "target": normalize_app(t)
+            })
 
     return results
-
-# ==================================================
-# INTENT DETECTION (STRONG RULE-BASED)
-# ==================================================
-def detect_intent(text: str):
-    text = text.lower()
-
-    for verb in COMMAND_VERBS:
-        if re.search(rf"\b{verb}\b", text):
-            return "command"
-
-    for q in QUESTION_WORDS:
-        if re.search(rf"\b{q}\b", text):
-            return "question"
-
-    return "chat"
 
 # ==================================================
 # API ENDPOINT
