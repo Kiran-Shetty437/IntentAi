@@ -46,8 +46,8 @@ nlp = spacy.load("en_core_web_sm")
 # ==================================================
 app = FastAPI(
     title="IntentAI – NLP Hybrid API",
-    description="Intent detection with platform-aware intelligent search",
-    version="1.2.0"
+    description="Intent detection with robust multi-command & platform-aware search",
+    version="1.3.0"
 )
 
 class InputText(BaseModel):
@@ -98,21 +98,19 @@ def detect_platform(text: str, query: str = "") -> str:
     text = text.lower()
     query = query.lower()
 
-    # 1️⃣ Explicit platform mentioned
+    # 1️⃣ Explicit platform
     for platform, keywords in SEARCH_PLATFORMS.items():
         for k in keywords:
             if k in text:
                 return platform
 
-    # 2️⃣ File / folder detection
-    for ext in FILE_EXTENSIONS:
-        if ext in query:
-            return "files"
-
+    # 2️⃣ File / folder
+    if any(ext in query for ext in FILE_EXTENSIONS):
+        return "files"
     if any(w in query for w in ["file", "folder", "directory"]):
         return "files"
 
-    # 3️⃣ App detection → Windows search
+    # 3️⃣ App → Windows search
     for app in KNOWN_APPS:
         if app in query:
             return "windows_search"
@@ -137,10 +135,12 @@ def parse_task(chunk: str):
     action = None
     targets = []
 
+    # 🔥 FIX: POS-based target extraction (NOT dependency-based)
     for token in doc:
         if token.pos_ == "VERB" and token.lemma_ in COMMAND_VERBS:
             action = token.lemma_
-        if token.dep_ in ("dobj", "pobj"):
+
+        if token.pos_ in ("NOUN", "PROPN") and not token.is_stop:
             targets.append(token.text)
 
     if not action:
@@ -149,14 +149,16 @@ def parse_task(chunk: str):
     if action == "paste":
         return [{"action": "paste"}]
 
-    if not targets or targets[0] in ("it", "app"):
+    if not targets:
         return [{"action": action, "needs_clarification": True}]
 
-    results = []
     joined_targets = " ".join(targets)
+    results = []
 
+    # ---------- SEARCH ----------
     if action == "search":
         platform = detect_platform(chunk, joined_targets)
+
         clean_query = re.sub(
             r"\b(on|in)?\s*(youtube|google|web|browser|files?|folders?)\b",
             "",
@@ -168,6 +170,8 @@ def parse_task(chunk: str):
             "query": clean_query,
             "platform": platform
         })
+
+    # ---------- OTHER COMMANDS ----------
     else:
         for t in re.split(r"\band\b|,", joined_targets):
             t = t.strip()
