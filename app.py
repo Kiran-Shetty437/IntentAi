@@ -17,6 +17,7 @@ COMMAND_VERBS = {
     "launch", "start", "exit", "quit"
 }
 
+# kept (not removed)
 SEARCH_PLATFORMS = {
     "youtube": {"youtube", "yt"},
     "google": {"google", "web", "browser"},
@@ -31,7 +32,8 @@ KNOWN_APPS = {
 
 FILE_EXTENSIONS = {
     ".txt", ".pdf", ".doc", ".docx", ".xls", ".xlsx",
-    ".ppt", ".pptx", ".jpg", ".png", ".mp4", ".zip"
+    ".ppt", ".pptx", ".jpg", ".png", ".mp4", ".zip",
+    ".py", ".js", ".java", ".cpp"
 }
 
 # ==================================================
@@ -43,9 +45,9 @@ nlp = spacy.load("en_core_web_sm")
 # FASTAPI APP
 # ==================================================
 app = FastAPI(
-    title="IntentAI – Final Stable API",
+    title="IntentAI – Explicit Platform Aware API",
     description="Multi-command, multi-task, multi-target intent engine",
-    version="2.2.0"
+    version="3.0.0"
 )
 
 class InputText(BaseModel):
@@ -71,36 +73,15 @@ def normalize_app(name: str) -> str:
     }
     return aliases.get(name.strip(), name.strip())
 
-# ==================================================
-# 🔥 PLATFORM DETECTION (PRIORITY FIXED – SAFE)
-# ==================================================
-def detect_platform(text: str, query: str) -> str:
-    text = text.lower()
-    query = query.lower()
-
-    # 1️⃣ FILE / FOLDER MUST WIN FIRST
-    if any(ext in query for ext in FILE_EXTENSIONS):
-        return "files"
-
-    if any(w in query for w in ["file", "files", "folder", "directory"]):
-        return "files"
-
-    # 2️⃣ EXPLICIT PLATFORMS (youtube, google, etc.)
-    for platform, keywords in SEARCH_PLATFORMS.items():
-        if platform == "files":
-            continue
-        if any(k in text for k in keywords):
-            return platform
-
-    # 3️⃣ APP NAME → WINDOWS SEARCH
-    if any(app in query for app in KNOWN_APPS):
-        return "windows_search"
-
-    # 4️⃣ DEFAULT
-    return "google"
+# 🔥 NEW: extract explicit "on <platform>"
+def extract_explicit_platform(text: str):
+    match = re.search(r"\bon\s+([a-zA-Z0-9_ ]+)", text)
+    if not match:
+        return None
+    return normalize_app(match.group(1).strip())
 
 # ==================================================
-# INTENT DETECTION (RULE BASED)
+# INTENT DETECTION (UNCHANGED)
 # ==================================================
 def detect_intent(text: str):
     for verb in COMMAND_VERBS:
@@ -114,7 +95,7 @@ def detect_intent(text: str):
     return "chat"
 
 # ==================================================
-# TASK SPLITTING
+# TASK SPLITTING (UNCHANGED)
 # ==================================================
 def split_tasks(text: str):
     pattern = r"\b(" + "|".join(COMMAND_VERBS) + r")\b"
@@ -132,7 +113,7 @@ def split_tasks(text: str):
     return chunks
 
 # ==================================================
-# TASK PARSER (COMMA + AND SAFE)
+# TASK PARSER (EXTENDED, NOT REPLACED)
 # ==================================================
 def parse_task(chunk: str):
     doc = nlp(chunk)
@@ -155,9 +136,8 @@ def parse_task(chunk: str):
 
     raw_target_text = parts[1]
 
-    # 🔥 Comma + "and" support
+    # comma + and logic (unchanged)
     raw_targets = re.split(r"\s*,\s*|\s+and\s+", raw_target_text)
-
     targets = [t.strip() for t in raw_targets if t.strip()]
 
     if not targets:
@@ -165,24 +145,29 @@ def parse_task(chunk: str):
 
     results = []
 
-    # ---------- SEARCH ----------
+    # ---------- SEARCH (UPDATED RULE) ----------
     if action == "search":
         joined_targets = " ".join(targets)
-        platform = detect_platform(chunk, joined_targets)
 
-        clean_query = re.sub(
-            r"\b(on|in)?\s*(youtube|google|browser|files?|folders?)\b",
-            "",
-            joined_targets
-        ).strip()
+        # 🔥 NEW RULE: explicit platform ONLY
+        platform = extract_explicit_platform(chunk)
+
+        clean_query = joined_targets
+
+        if platform:
+            clean_query = re.sub(
+                rf"\bon\s+{re.escape(platform)}\b",
+                "",
+                clean_query
+            ).strip()
 
         results.append({
             "action": "search",
             "query": clean_query,
-            "platform": platform
+            "platform": platform  # None if not specified
         })
 
-    # ---------- OTHER COMMANDS ----------
+    # ---------- OTHER COMMANDS (UNCHANGED) ----------
     else:
         for t in targets:
             results.append({
