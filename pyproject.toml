@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intentai"
+version = "1.0.0"
+description = "IntentAI SDK"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []
+
+authors = [
+  { name="Kiran Shetty" }
+]

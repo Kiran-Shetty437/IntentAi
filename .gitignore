@@ -1,3 +1,12 @@
+# Python cache
 __pycache__/
+*.pyc
+
+# Environment & venv
 .env
 venv/
+
+# Packaging / build files
+*.egg-info/
+dist/
+build/
