@@ -112,9 +112,8 @@ def split_tasks(text: str):
 
     return chunks
 
-# ==================================================
+
 # TASK PARSER (EXTENDED, NOT REPLACED)
-# ==================================================
 def parse_task(chunk: str):
     doc = nlp(chunk)
     action = None
