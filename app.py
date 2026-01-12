@@ -14,7 +14,9 @@ QUESTION_WORDS = {"how", "what", "why", "where", "when", "who", "which"}
 COMMAND_VERBS = {
     "open", "close", "search", "find",
     "copy", "paste", "delete", "save",
-    "launch", "start", "exit", "quit"
+    "launch", "start", "exit", "quit",
+    "minimize", "maximize", "restore",
+    "focus"
 }
 
 # kept (not removed)
