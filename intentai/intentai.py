@@ -26,7 +26,7 @@ class IntentAI:
             f"{self.base_url}/intent",
             json=payload,
             headers=headers,
-            timeout=10
+            timeout=60
         )
 
         response.raise_for_status()
